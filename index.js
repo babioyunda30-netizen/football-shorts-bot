@@ -23,6 +23,19 @@ client.on("messageCreate", (msg) => {
 
   if (msg.content.toLowerCase() === "test") {
     msg.reply("✅ Test aldım.");
+
+      if (msg.content.toLowerCase() === "haber") {
+    try {
+      const n = await getDailyNews();
+      await msg.reply(
+        `📰 **Günün Futbol Haberi**\n\n**${n.title}**\n${n.summary}\n\nKaynak: ${n.link}`
+      );
+    } catch (e) {
+      await msg.reply("❌ Haber çekemedim. Biraz sonra tekrar dene.");
+      console.error(e);
+    }
+  }
+
   }
 });
 
