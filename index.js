@@ -1,4 +1,5 @@
 import { Client, GatewayIntentBits } from "discord.js";
+import { getDailyNews } from "./news.js";
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const TARGET_USER_ID = process.env.TARGET_USER_ID;
