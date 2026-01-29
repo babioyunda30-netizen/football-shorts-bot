@@ -3,6 +3,7 @@ import http from "node:http";
 import cron from "node-cron";
 import fs from "node:fs";
 import { getNewsFromSources } from "./news.js";
+import { fetchArticleText, summarizeText, translateToTR } from "./article.js";
 
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -117,17 +118,45 @@ if (t === "haber") {
 
     const turEmoji = n.type === "RESMI" ? "🟢" : "🟡";
     const turText = n.type === "RESMI" ? "Resmî" : "Söylenti";
-    const dilText =
-      n.lang === "TR"
-        ? "Türkçe"
-        : "İngilizce (özetlendi)";
+
+    // Dil artık değişmesin: hep Türkçe yazacağız
+    const dilText = "Türkçe";
+
+    // 1) Tam metni çek
+    let fullText = "";
+    try {
+      if (n.link) fullText = await fetchArticleText(n.link);
+    } catch (e) {
+      console.error("Makale çekilemedi:", e?.message || e);
+    }
+
+    // 2) Özetle (tam metin yoksa RSS summary’den özet yap)
+    const baseText = fullText && fullText.length > 200 ? fullText : (n.summary || "");
+    let ozetTR = summarizeText(baseText, 3);
+
+    // 3) İngilizce kaynaksa -> Türkçeye çevir
+    // BBC gibi: n.lang === "EN"
+    let ceviriBilgi = "";
+    if (n.lang === "EN") {
+      const tr = await translateToTR(ozetTR || n.summary || "");
+      if (tr) {
+        ceviriBilgi = `\n\n🈶 **Çeviri (TR):**\n${tr}`;
+      }
+    }
+
+    // “devamı için tıkla” gibi boş içerik olmasın:
+    // Özet boşsa kısa uyarı ver ama “tıkla” deme.
+    if (!ozetTR || ozetTR.length < 40) {
+      ozetTR = "Bu haber kaynağı metni çok kısa verdi; özet çıkarılamadı.";
+    }
 
     await msg.reply(
       `${turEmoji} Tür: ${turText}\n` +
       `📰 Kaynak: ${n.source}\n` +
       `🌍 Dil: ${dilText}\n\n` +
-      `**${n.title}**\n${n.summary}\n\n` +
-      `🔗 ${n.link}`
+      `**${n.title}**\n${ozetTR}` +
+      `${ceviriBilgi}\n\n` +
+      `🔗 Kaynak: ${n.link}`
     );
   } catch (e) {
     console.error(e);
