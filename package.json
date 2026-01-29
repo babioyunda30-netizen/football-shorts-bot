@@ -7,9 +7,12 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.14.1",
-    "axios": "^1.6.0",
-    "xml2js": "^0.6.2",
-    "node-cron": "^3.0.3"
-  }
+  "discord.js": "^14.14.1",
+  "axios": "^1.6.0",
+  "xml2js": "^0.6.2",
+  "node-cron": "^3.0.3",
+  "jsdom": "^24.0.0",
+  "@mozilla/readability": "^0.5.0"
+}
+
 }
