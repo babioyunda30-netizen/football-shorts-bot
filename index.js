@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits } from "discord.js";
 import http from "node:http";
 import cron from "node-cron";
+import fs from "node:fs";
 import { getDailyNews, getTwoDailyNews } from "./news.js";
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -22,6 +23,24 @@ if (!TOKEN) {
 if (!TARGET_USER_ID) {
   console.error("TARGET_USER_ID yok (Render env variables kontrol et).");
   process.exit(1);
+}
+
+// ---- Karar kaydı (FAZ 1) ----
+function loadDecisions() {
+  try {
+    const raw = fs.readFileSync("./decisions.json", "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    // dosya yoksa veya bozuksa default oluştur
+    return {
+      oglen: { kalsin: 0, sil: 0 },
+      aksam: { kalsin: 0, sil: 0 }
+    };
+  }
+}
+
+function saveDecisions(data) {
+  fs.writeFileSync("./decisions.json", JSON.stringify(data, null, 2));
 }
 
 const client = new Client({
@@ -50,12 +69,10 @@ client.once("ready", async () => {
   console.log(`Bot hazır: ${client.user.tag}`);
   await dm("🤖 Bot çalışıyor. DM testi başarılı!");
 
-  // Her gün 12:30 ve 20:30 (Azerbaycan saati +04:00)
-  // Render genelde UTC'dir; en garanti yöntem: timezone ile cron
+  // 08:30 UTC = 12:30 AZT (+04)
   cron.schedule(
     "30 8 * * *",
     async () => {
-      // 08:30 UTC = 12:30 AZT (+04)
       try {
         const d = await getTwoDailyNews();
         await dm("⏰ **Otomatik günlük paket (Öğlen)**\n\n" + packMessage(d));
@@ -67,10 +84,10 @@ client.once("ready", async () => {
     { timezone: "UTC" }
   );
 
+  // 16:30 UTC = 20:30 AZT (+04)
   cron.schedule(
     "30 16 * * *",
     async () => {
-      // 16:30 UTC = 20:30 AZT (+04)
       try {
         const d = await getTwoDailyNews();
         await dm("⏰ **Otomatik günlük paket (Akşam)**\n\n" + packMessage(d));
@@ -117,21 +134,36 @@ client.on("messageCreate", async (msg) => {
     return;
   }
 
-  // Şimdilik bu komutlar sadece "not" gibi. (YouTube silme/yükleme FAZ 2)
+  // ---- Karar komutları ----
   if (t === "oglen sil") {
-    await msg.reply("🗑️ Öğlen içeriği: SİLİNSİN olarak işaretlendi (şimdilik not).");
+    const d = loadDecisions();
+    d.oglen.sil++;
+    saveDecisions(d);
+    await msg.reply("🗑️ Öğlen içeriği SİLİNSİN olarak kaydedildi.");
     return;
   }
+
   if (t === "oglen kalsin") {
-    await msg.reply("✅ Öğlen içeriği: KALSIN olarak işaretlendi (şimdilik not).");
+    const d = loadDecisions();
+    d.oglen.kalsin++;
+    saveDecisions(d);
+    await msg.reply("✅ Öğlen içeriği KALSIN olarak kaydedildi.");
     return;
   }
+
   if (t === "aksam sil") {
-    await msg.reply("🗑️ Akşam içeriği: SİLİNSİN olarak işaretlendi (şimdilik not).");
+    const d = loadDecisions();
+    d.aksam.sil++;
+    saveDecisions(d);
+    await msg.reply("🗑️ Akşam içeriği SİLİNSİN olarak kaydedildi.");
     return;
   }
+
   if (t === "aksam kalsin") {
-    await msg.reply("✅ Akşam içeriği: KALSIN olarak işaretlendi (şimdilik not).");
+    const d = loadDecisions();
+    d.aksam.kalsin++;
+    saveDecisions(d);
+    await msg.reply("✅ Akşam içeriği KALSIN olarak kaydedildi.");
     return;
   }
 });
