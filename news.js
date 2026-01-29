@@ -1,47 +1,37 @@
 import axios from "axios";
 import { parseStringPromise } from "xml2js";
-
-const RSS_URL =
-  "http://newsrss.bbc.co.uk/rss/sportonline_uk_edition/football/rss.xml";
+import { SOURCES } from "./sources.js";
 
 function cleanHtml(x) {
   return (x ?? "").replace(/<[^>]*>/g, "").trim();
 }
 
-function makeItem(pick) {
-  return {
-    title: pick.title?.[0] ?? "Başlık yok",
-    link: pick.link?.[0] ?? "",
-    summary: cleanHtml(pick.description?.[0] ?? "")
-  };
-}
+export async function getNewsFromSources() {
+  const pickedSource =
+    SOURCES[Math.floor(Math.random() * SOURCES.length)];
 
-async function fetchItems() {
-  const res = await axios.get(RSS_URL, { timeout: 15000 });
+  const res = await axios.get(pickedSource.rss, { timeout: 15000 });
   const parsed = await parseStringPromise(res.data);
-  const items = parsed?.rss?.channel?.[0]?.item ?? [];
-  if (!items.length) throw new Error("RSS boş geldi.");
-  return items;
-}
 
-export async function getDailyNews() {
-  const items = await fetchItems();
-  const pickFrom = items.slice(0, 5);
-  const pick = pickFrom[Math.floor(Math.random() * pickFrom.length)];
-  return makeItem(pick);
-}
+  const items =
+    parsed?.rss?.channel?.[0]?.item ??
+    parsed?.feed?.entry ??
+    [];
 
-export async function getTwoDailyNews() {
-  const items = await fetchItems();
-  if (items.length < 2) throw new Error("Yeterli haber yok.");
+  if (!items.length) throw new Error("Haber bulunamadı");
 
-  const top = items.slice(0, 10);
+  const pick = items[Math.floor(Math.random() * items.length)];
 
-  const a = top[Math.floor(Math.random() * top.length)];
-  let b = top[Math.floor(Math.random() * top.length)];
-  while (b?.link?.[0] === a?.link?.[0]) {
-    b = top[Math.floor(Math.random() * top.length)];
-  }
-
-  return { noon: makeItem(a), evening: makeItem(b) };
+  return {
+    title: pick.title?.[0] || pick.title,
+    summary: cleanHtml(
+      pick.description?.[0] ||
+      pick.summary?.[0] ||
+      ""
+    ),
+    link: pick.link?.[0]?.href || pick.link?.[0] || "",
+    source: pickedSource.name,
+    type: pickedSource.type,
+    lang: pickedSource.lang
+  };
 }
