@@ -2,9 +2,9 @@ import { Client, GatewayIntentBits } from "discord.js";
 import http from "node:http";
 import cron from "node-cron";
 import fs from "node:fs";
+
 import { getNewsFromSources } from "./news.js";
 import { fetchArticleText, summarizeText, translateToTR } from "./article.js";
-
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const TARGET_USER_ID = process.env.TARGET_USER_ID;
@@ -33,7 +33,6 @@ function loadDecisions() {
     const raw = fs.readFileSync("./decisions.json", "utf-8");
     return JSON.parse(raw);
   } catch {
-    // dosya yoksa veya bozuksa default oluştur
     return {
       oglen: { kalsin: 0, sil: 0 },
       aksam: { kalsin: 0, sil: 0 }
@@ -58,7 +57,8 @@ async function dm(text) {
   return user.send(text);
 }
 
-function packMessage(d) {
+function packMessageSimple(d) {
+  // Eski "gunluk" formatı (sonra istersen bunu da yeni sisteme geçiririz)
   return (
     `📅 **Günlük 2 içerik önerisi**\n\n` +
     `🕛 **Öğlen (12:30)**\n**${d.noon.title}**\n${d.noon.summary}\nKaynak: ${d.noon.link}\n\n` +
@@ -67,35 +67,94 @@ function packMessage(d) {
   );
 }
 
+function buildHeader(n) {
+  const turEmoji = n.type === "RESMI" ? "🟢" : "🟡";
+  const turText = n.type === "RESMI" ? "Resmî" : "Söylenti";
+  // Dil sabit: hep Türkçe görünsün
+  const dilText = "Türkçe";
+  return `${turEmoji} Tür: ${turText}\n📰 Kaynak: ${n.source}\n🌍 Dil: ${dilText}\n`;
+}
+
+async function buildNewsMessage(n) {
+  // 1) Tam metni çek
+  let fullText = "";
+  try {
+    if (n.link) fullText = await fetchArticleText(n.link);
+  } catch (e) {
+    console.error("Makale çekilemedi:", e?.message || e);
+  }
+
+  // 2) Özetle: tam metin varsa onu, yoksa RSS summary
+  const baseText =
+    fullText && fullText.length > 200
+      ? fullText
+      : (n.summary || "");
+
+  let ozetTR = summarizeText(baseText, 3);
+
+  // Fallback: özet boşsa RSS'ye düş
+  if (!ozetTR || ozetTR.length < 40) {
+    ozetTR = (n.summary || "").replace(/\s+/g, " ").trim();
+  }
+  if (!ozetTR || ozetTR.length < 40) {
+    ozetTR = "Bu haber kaynağı metni kısa verdi/engelledi, özet çıkarılamadı.";
+  }
+
+  // 3) İngilizce kaynaksa -> Türkçe çeviri ekle
+  let ceviriBilgi = "";
+  if (n.lang === "EN") {
+    try {
+      const tr = await translateToTR(ozetTR);
+      if (tr) {
+        ceviriBilgi = `\n\n🈶 **Çeviri (TR):**\n${tr}`;
+      }
+    } catch (e) {
+      console.error("Çeviri hatası:", e?.message || e);
+    }
+  }
+
+  // Mesaj
+  return (
+    `${buildHeader(n)}\n` +
+    `**${n.title}**\n` +
+    `${ozetTR}` +
+    `${ceviriBilgi}\n\n` +
+    `🔗 Kaynak: ${n.link}`
+  );
+}
+
 client.once("ready", async () => {
   console.log(`Bot hazır: ${client.user.tag}`);
   await dm("🤖 Bot çalışıyor. DM testi başarılı!");
 
-  // 08:30 UTC = 12:30 AZT (+04)
+  // Otomatik DM saatleri (UTC üzerinden)
   cron.schedule(
     "30 8 * * *",
     async () => {
       try {
-        const d = await getTwoDailyNews();
-        await dm("⏰ **Otomatik günlük paket (Öğlen)**\n\n" + packMessage(d));
+        // Şimdilik eski sistem: (istersen yarın bunu da yeni formatla yaparız)
+        // Burada otomatik 2 haber yerine 1 haber de atabiliriz.
+        const n = await getNewsFromSources();
+        const text = await buildNewsMessage(n);
+        await dm("⏰ **Otomatik haber (Öğlen)**\n\n" + text);
       } catch (e) {
         console.error(e);
-        await dm("❌ Otomatik paket (öğlen) hazırlanamadı.");
+        await dm("❌ Otomatik haber (öğlen) hazırlanamadı.");
       }
     },
     { timezone: "UTC" }
   );
 
-  // 16:30 UTC = 20:30 AZT (+04)
   cron.schedule(
     "30 16 * * *",
     async () => {
       try {
-        const d = await getTwoDailyNews();
-        await dm("⏰ **Otomatik günlük paket (Akşam)**\n\n" + packMessage(d));
+        const n = await getNewsFromSources();
+        const text = await buildNewsMessage(n);
+        await dm("⏰ **Otomatik haber (Akşam)**\n\n" + text);
       } catch (e) {
         console.error(e);
-        await dm("❌ Otomatik paket (akşam) hazırlanamadı.");
+        await dm("❌ Otomatik haber (akşam) hazırlanamadı.");
       }
     },
     { timezone: "UTC" }
@@ -112,68 +171,42 @@ client.on("messageCreate", async (msg) => {
     return;
   }
 
-if (t === "haber") {
-  try {
-    const n = await getNewsFromSources();
-
-    const turEmoji = n.type === "RESMI" ? "🟢" : "🟡";
-    const turText = n.type === "RESMI" ? "Resmî" : "Söylenti";
-
-    // Dil artık değişmesin: hep Türkçe yazacağız
-    const dilText = "Türkçe";
-
-    // 1) Tam metni çek
-    let fullText = "";
+  // Çeviri testi
+  if (t === "bbc") {
     try {
-      if (n.link) fullText = await fetchArticleText(n.link);
-    } catch (e) {
-      console.error("Makale çekilemedi:", e?.message || e);
-    }
+      const textEN =
+        "Breaking: A top club is in talks for a new striker as fans react online.";
+      const tr = await translateToTR(textEN);
 
-    // 2) Özetle (tam metin yoksa RSS summary’den özet yap)
-    const baseText = fullText && fullText.length > 200 ? fullText : (n.summary || "");
-    let ozetTR = summarizeText(baseText, 3);
-
-    // 3) İngilizce kaynaksa -> Türkçeye çevir
-    // BBC gibi: n.lang === "EN"
-    let ceviriBilgi = "";
-    if (n.lang === "EN") {
-      const tr = await translateToTR(ozetTR || n.summary || "");
-      if (tr) {
-        ceviriBilgi = `\n\n🈶 **Çeviri (TR):**\n${tr}`;
-      }
-    }
-
-    // “devamı için tıkla” gibi boş içerik olmasın:
-    // Özet boşsa kısa uyarı ver ama “tıkla” deme.
-    if (!ozetTR || ozetTR.length < 40) {
-      ozetTR = "Bu haber kaynağı metni çok kısa verdi; özet çıkarılamadı.";
-    }
-
-    await msg.reply(
-      `${turEmoji} Tür: ${turText}\n` +
-      `📰 Kaynak: ${n.source}\n` +
-      `🌍 Dil: ${dilText}\n\n` +
-      `**${n.title}**\n${ozetTR}` +
-      `${ceviriBilgi}\n\n` +
-      `🔗 Kaynak: ${n.link}`
-    );
-  } catch (e) {
-    console.error(e);
-    await msg.reply("❌ Haber çekemedim.");
-  }
-  return;
-}
-
-
-  if (t === "gunluk") {
-    try {
-      const d = await getTwoDailyNews();
-      await msg.reply(packMessage(d));
+      await msg.reply(
+        `🧪 **Çeviri Testi**\n\n` +
+          `🇬🇧 EN:\n${textEN}\n\n` +
+          `🇹🇷 TR:\n${tr}`
+      );
     } catch (e) {
       console.error(e);
-      await msg.reply("❌ Günlük paket hazırlayamadım. Biraz sonra dene.");
+      await msg.reply("❌ Çeviri testi başarısız oldu.");
     }
+    return;
+  }
+
+  // Haber (çoklu kaynak + özet + EN ise TR çeviri)
+  if (t === "haber") {
+    try {
+      const n = await getNewsFromSources();
+      const text = await buildNewsMessage(n);
+      await msg.reply(text);
+    } catch (e) {
+      console.error(e);
+      await msg.reply("❌ Haber çekemedim.");
+    }
+    return;
+  }
+
+  // (Opsiyonel) Günlük komutu: şimdilik kapatıyorum çünkü eski news.js'le uyumluydu.
+  // İstersen yarın "gunluk"ü de yeni sistemle 2 haber atacak şekilde yazarız.
+  if (t === "gunluk") {
+    await msg.reply("ℹ️ 'gunluk' komutunu sonra yeni sisteme uyarlayacağız. Şimdilik 'haber' kullan.");
     return;
   }
 
