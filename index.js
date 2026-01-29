@@ -2,7 +2,8 @@ import { Client, GatewayIntentBits } from "discord.js";
 import http from "node:http";
 import cron from "node-cron";
 import fs from "node:fs";
-import { getDailyNews, getTwoDailyNews } from "./news.js";
+import { getNewsFromSources } from "./news.js";
+
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const TARGET_USER_ID = process.env.TARGET_USER_ID;
@@ -110,18 +111,31 @@ client.on("messageCreate", async (msg) => {
     return;
   }
 
-  if (t === "haber") {
-    try {
-      const n = await getDailyNews();
-      await msg.reply(
-        `📰 **Günün Futbol Haberi**\n\n**${n.title}**\n${n.summary}\n\nKaynak: ${n.link}`
-      );
-    } catch (e) {
-      console.error(e);
-      await msg.reply("❌ Haber çekemedim. Biraz sonra tekrar dene.");
-    }
-    return;
+if (t === "haber") {
+  try {
+    const n = await getNewsFromSources();
+
+    const turEmoji = n.type === "RESMI" ? "🟢" : "🟡";
+    const turText = n.type === "RESMI" ? "Resmî" : "Söylenti";
+    const dilText =
+      n.lang === "TR"
+        ? "Türkçe"
+        : "İngilizce (özetlendi)";
+
+    await msg.reply(
+      `${turEmoji} Tür: ${turText}\n` +
+      `📰 Kaynak: ${n.source}\n` +
+      `🌍 Dil: ${dilText}\n\n` +
+      `**${n.title}**\n${n.summary}\n\n` +
+      `🔗 ${n.link}`
+    );
+  } catch (e) {
+    console.error(e);
+    await msg.reply("❌ Haber çekemedim.");
   }
+  return;
+}
+
 
   if (t === "gunluk") {
     try {
