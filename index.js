@@ -57,21 +57,10 @@ async function dm(text) {
   return user.send(text);
 }
 
-function packMessageSimple(d) {
-  // Eski "gunluk" formatı (sonra istersen bunu da yeni sisteme geçiririz)
-  return (
-    `📅 **Günlük 2 içerik önerisi**\n\n` +
-    `🕛 **Öğlen (12:30)**\n**${d.noon.title}**\n${d.noon.summary}\nKaynak: ${d.noon.link}\n\n` +
-    `🌙 **Akşam (20:30)**\n**${d.evening.title}**\n${d.evening.summary}\nKaynak: ${d.evening.link}\n\n` +
-    `Komutlar:\n- "oglen kalsin" / "oglen sil"\n- "aksam kalsin" / "aksam sil"`
-  );
-}
-
 function buildHeader(n) {
   const turEmoji = n.type === "RESMI" ? "🟢" : "🟡";
   const turText = n.type === "RESMI" ? "Resmî" : "Söylenti";
-  // Dil sabit: hep Türkçe görünsün
-  const dilText = "Türkçe";
+  const dilText = "Türkçe"; // sabit
   return `${turEmoji} Tür: ${turText}\n📰 Kaynak: ${n.source}\n🌍 Dil: ${dilText}\n`;
 }
 
@@ -86,9 +75,7 @@ async function buildNewsMessage(n) {
 
   // 2) Özetle: tam metin varsa onu, yoksa RSS summary
   const baseText =
-    fullText && fullText.length > 200
-      ? fullText
-      : (n.summary || "");
+    fullText && fullText.length > 200 ? fullText : (n.summary || "");
 
   let ozetTR = summarizeText(baseText, 3);
 
@@ -113,7 +100,6 @@ async function buildNewsMessage(n) {
     }
   }
 
-  // Mesaj
   return (
     `${buildHeader(n)}\n` +
     `**${n.title}**\n` +
@@ -127,34 +113,45 @@ client.once("ready", async () => {
   console.log(`Bot hazır: ${client.user.tag}`);
   await dm("🤖 Bot çalışıyor. DM testi başarılı!");
 
-  // Otomatik DM saatleri (UTC üzerinden)
+  // Öğlen (08:30 UTC = 12:30 AZT)
   cron.schedule(
     "30 8 * * *",
     async () => {
       try {
-        // Şimdilik eski sistem: (istersen yarın bunu da yeni formatla yaparız)
-        // Burada otomatik 2 haber yerine 1 haber de atabiliriz.
-        const n = await getNewsFromSources();
-        const text = await buildNewsMessage(n);
-        await dm("⏰ **Otomatik haber (Öğlen)**\n\n" + text);
+        const p = await getTwoNewsPack();
+        const t1 = await buildNewsMessage(p.first);
+        const t2 = await buildNewsMessage(p.second);
+
+        await dm(
+          "⏰ **Otomatik Paket (Öğlen)**\n\n" +
+            `1)\n${t1}\n\n` +
+            `2)\n${t2}`
+        );
       } catch (e) {
         console.error(e);
-        await dm("❌ Otomatik haber (öğlen) hazırlanamadı.");
+        await dm("❌ Otomatik paket (öğlen) hazırlanamadı.");
       }
     },
     { timezone: "UTC" }
   );
 
+  // Akşam (16:30 UTC = 20:30 AZT)
   cron.schedule(
     "30 16 * * *",
     async () => {
       try {
-        const n = await getNewsFromSources();
-        const text = await buildNewsMessage(n);
-        await dm("⏰ **Otomatik haber (Akşam)**\n\n" + text);
+        const p = await getTwoNewsPack();
+        const t1 = await buildNewsMessage(p.first);
+        const t2 = await buildNewsMessage(p.second);
+
+        await dm(
+          "⏰ **Otomatik Paket (Akşam)**\n\n" +
+            `1)\n${t1}\n\n` +
+            `2)\n${t2}`
+        );
       } catch (e) {
         console.error(e);
-        await dm("❌ Otomatik haber (akşam) hazırlanamadı.");
+        await dm("❌ Otomatik paket (akşam) hazırlanamadı.");
       }
     },
     { timezone: "UTC" }
@@ -163,7 +160,6 @@ client.once("ready", async () => {
 
 client.on("messageCreate", async (msg) => {
   if (msg.author.id !== TARGET_USER_ID) return;
-
   const t = msg.content.toLowerCase().trim();
 
   if (t === "test") {
@@ -171,17 +167,13 @@ client.on("messageCreate", async (msg) => {
     return;
   }
 
-  // Çeviri testi
   if (t === "bbc") {
     try {
       const textEN =
         "Breaking: A top club is in talks for a new striker as fans react online.";
       const tr = await translateToTR(textEN);
-
       await msg.reply(
-        `🧪 **Çeviri Testi**\n\n` +
-          `🇬🇧 EN:\n${textEN}\n\n` +
-          `🇹🇷 TR:\n${tr}`
+        `🧪 **Çeviri Testi**\n\n🇬🇧 EN:\n${textEN}\n\n🇹🇷 TR:\n${tr}`
       );
     } catch (e) {
       console.error(e);
@@ -190,7 +182,6 @@ client.on("messageCreate", async (msg) => {
     return;
   }
 
-  // Haber (çoklu kaynak + özet + EN ise TR çeviri)
   if (t === "haber") {
     try {
       const n = await getNewsFromSources();
@@ -203,26 +194,24 @@ client.on("messageCreate", async (msg) => {
     return;
   }
 
-  // (Opsiyonel) Günlük komutu: şimdilik kapatıyorum çünkü eski news.js'le uyumluydu.
-  // İstersen yarın "gunluk"ü de yeni sistemle 2 haber atacak şekilde yazarız.
-if (t === "gunluk") {
-  try {
-    const p = await getTwoNewsPack();
+  if (t === "gunluk") {
+    try {
+      const p = await getTwoNewsPack();
+      const t1 = await buildNewsMessage(p.first);
+      const t2 = await buildNewsMessage(p.second);
 
-    const text1 = await buildNewsMessage(p.first);
-    const text2 = await buildNewsMessage(p.second);
-
-    await msg.reply(
-      `📦 **Günlük Paket (2 Haber)**\n\n` +
-      `1) \n${text1}\n\n` +
-      `2) \n${text2}`
-    );
-  } catch (e) {
-    console.error(e);
-    await msg.reply("❌ Günlük paket çekemedim.");
+      await msg.reply(
+        `📦 **Günlük Paket (2 Haber)**\n\n` +
+          `1)\n${t1}\n\n` +
+          `2)\n${t2}`
+      );
+    } catch (e) {
+      console.error(e);
+      await msg.reply("❌ Günlük paket çekemedim.");
+    }
+    return;
   }
-  return;
-}
+
   // ---- Karar komutları ----
   if (t === "oglen sil") {
     const d = loadDecisions();
