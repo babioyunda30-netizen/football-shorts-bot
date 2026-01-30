@@ -3,14 +3,11 @@ import { parseStringPromise } from "xml2js";
 import { SOURCES } from "./sources.js";
 
 function cleanHtml(x) {
-  return (x ?? "").replace(/<[^>]*>/g, "").trim();
+  return (x ?? "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
 }
 
-export async function getNewsFromSources() {
-  const pickedSource =
-    SOURCES[Math.floor(Math.random() * SOURCES.length)];
-
-  const res = await axios.get(pickedSource.rss, { timeout: 15000 });
+async function fetchFromRss(source) {
+  const res = await axios.get(source.rss, { timeout: 15000 });
   const parsed = await parseStringPromise(res.data);
 
   const items =
@@ -18,65 +15,64 @@ export async function getNewsFromSources() {
     parsed?.feed?.entry ??
     [];
 
-  if (!items.length) throw new Error("Haber bulunamadı");
+  if (!items.length) throw new Error("RSS boş: " + source.name);
 
   const pick = items[Math.floor(Math.random() * items.length)];
 
-  return {
-    title: pick.title?.[0] || pick.title,
-    summary: cleanHtml(
-      pick.description?.[0] ||
+  const title = pick.title?.[0] || pick.title || "";
+  const summary = cleanHtml(
+    pick.description?.[0] ||
       pick.summary?.[0] ||
+      pick["content:encoded"]?.[0] ||
       ""
-    ),
-    link: pick.link?.[0]?.href || pick.link?.[0] || "",
-    source: pickedSource.name,
-    type: pickedSource.type,
-    lang: pickedSource.lang
+  );
+
+  const link =
+    pick.link?.[0]?.href ||
+    pick.link?.[0] ||
+    pick.guid?.[0]?._ ||
+    pick.guid?.[0] ||
+    "";
+
+  return {
+    title,
+    summary,
+    link,
+    source: source.name,
+    type: source.type, // RESMI / SOYLENTI
+    lang: source.lang  // TR / EN
   };
-export async function getTwoNewsPack() {
-  // 1) Resmî + 1) Söylenti yakalamaya çalış
-  const want = ["RESMI", "SOYLENTI"];
-  const picked = [];
-
-  for (const type of want) {
-    let got = null;
-
-    for (let i = 0; i < 6; i++) {
-      const n = await getNewsFromSources();
-
-      // aynı link tekrar gelmesin
-      const dup = picked.some((p) => p.link && p.link === n.link);
-      if (dup) continue;
-
-      if (n.type === type) {
-        got = n;
-        break;
-      }
-    }
-
-    // bulunamazsa rastgele bir haberle doldur
-    if (!got) {
-      for (let i = 0; i < 6; i++) {
-        const n = await getNewsFromSources();
-        const dup = picked.some((p) => p.link && p.link === n.link);
-        if (dup) continue;
-        got = n;
-        break;
-      }
-    }
-
-    if (got) picked.push(got);
-  }
-
-  // her ihtimale karşı 2 tane yoksa tamamla
-  while (picked.length < 2) {
-    const n = await getNewsFromSources();
-    const dup = picked.some((p) => p.link && p.link === n.link);
-    if (!dup) picked.push(n);
-  }
-
-  return { first: picked[0], second: picked[1] };
 }
 
+export async function getNewsFromSources() {
+  // 1) Rastgele kaynak seç
+  const src = SOURCES[Math.floor(Math.random() * SOURCES.length)];
+  return await fetchFromRss(src);
+}
+
+export async function getTwoNewsPack() {
+  // hedef: 1 RESMI + 1 SOYLENTI (bulamazsa rastgele)
+  const picked = [];
+
+  async function tryGet(typeWanted) {
+    for (let i = 0; i < 8; i++) {
+      const n = await getNewsFromSources();
+      const dup = picked.some((p) => p.link && p.link === n.link);
+      if (dup) continue;
+      if (n.type === typeWanted) return n;
+    }
+    return null;
+  }
+
+  let res = await tryGet("RESMI");
+  if (!res) res = await getNewsFromSources();
+  picked.push(res);
+
+  let soy = await tryGet("SOYLENTI");
+  if (!soy) soy = await getNewsFromSources();
+  // aynı link gelirse bir kere daha dene
+  if (picked[0].link && soy.link === picked[0].link) soy = await getNewsFromSources();
+  picked.push(soy);
+
+  return { first: picked[0], second: picked[1] };
 }
