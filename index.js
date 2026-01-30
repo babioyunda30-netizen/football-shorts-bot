@@ -205,11 +205,24 @@ client.on("messageCreate", async (msg) => {
 
   // (Opsiyonel) Günlük komutu: şimdilik kapatıyorum çünkü eski news.js'le uyumluydu.
   // İstersen yarın "gunluk"ü de yeni sistemle 2 haber atacak şekilde yazarız.
-  if (t === "gunluk") {
-    await msg.reply("ℹ️ 'gunluk' komutunu sonra yeni sisteme uyarlayacağız. Şimdilik 'haber' kullan.");
-    return;
-  }
+if (t === "gunluk") {
+  try {
+    const p = await getTwoNewsPack();
 
+    const text1 = await buildNewsMessage(p.first);
+    const text2 = await buildNewsMessage(p.second);
+
+    await msg.reply(
+      `📦 **Günlük Paket (2 Haber)**\n\n` +
+      `1) \n${text1}\n\n` +
+      `2) \n${text2}`
+    );
+  } catch (e) {
+    console.error(e);
+    await msg.reply("❌ Günlük paket çekemedim.");
+  }
+  return;
+}
   // ---- Karar komutları ----
   if (t === "oglen sil") {
     const d = loadDecisions();
