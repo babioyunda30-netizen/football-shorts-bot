@@ -3,7 +3,7 @@ import http from "node:http";
 import cron from "node-cron";
 import fs from "node:fs";
 
-import { getNewsFromSources } from "./news.js";
+import { getNewsFromSources, getTwoNewsPack } from "./news.js";
 import { fetchArticleText, summarizeText, translateToTR } from "./article.js";
 
 const TOKEN = process.env.DISCORD_TOKEN;
