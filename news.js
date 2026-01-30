@@ -7,7 +7,7 @@ function cleanHtml(x) {
 }
 
 async function fetchFromRss(source) {
-  const res = await axios.get(source.rss, { timeout: 15000 });
+  const res = await axios.get(source.rss, { timeout: 20000 });
   const parsed = await parseStringPromise(res.data);
 
   const items =
@@ -39,23 +39,48 @@ async function fetchFromRss(source) {
     summary,
     link,
     source: source.name,
-    type: source.type, // RESMI / SOYLENTI
-    lang: source.lang  // TR / EN
+    type: source.type,
+    lang: source.lang
   };
 }
 
+function shuffled(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// ✅ Burada fark: tek kaynak yerine çok kaynak deniyoruz
 export async function getNewsFromSources() {
-  // 1) Rastgele kaynak seç
-  const src = SOURCES[Math.floor(Math.random() * SOURCES.length)];
-  return await fetchFromRss(src);
+  const list = shuffled(SOURCES);
+
+  let lastErr = null;
+  for (const src of list) {
+    try {
+      const n = await fetchFromRss(src);
+
+      // çok boş başlık/boş link gelirse başka kaynağa geç
+      if (!n.title || n.title.length < 6) continue;
+      if (!n.link || n.link.length < 8) continue;
+
+      return n;
+    } catch (e) {
+      lastErr = e;
+      continue;
+    }
+  }
+
+  throw lastErr || new Error("Hiçbir kaynaktan haber çekilemedi.");
 }
 
 export async function getTwoNewsPack() {
-  // hedef: 1 RESMI + 1 SOYLENTI (bulamazsa rastgele)
   const picked = [];
 
-  async function tryGet(typeWanted) {
-    for (let i = 0; i < 8; i++) {
+  async function getType(typeWanted) {
+    for (let i = 0; i < 10; i++) {
       const n = await getNewsFromSources();
       const dup = picked.some((p) => p.link && p.link === n.link);
       if (dup) continue;
@@ -64,15 +89,14 @@ export async function getTwoNewsPack() {
     return null;
   }
 
-  let res = await tryGet("RESMI");
-  if (!res) res = await getNewsFromSources();
-  picked.push(res);
+  let a = await getType("RESMI");
+  if (!a) a = await getNewsFromSources();
+  picked.push(a);
 
-  let soy = await tryGet("SOYLENTI");
-  if (!soy) soy = await getNewsFromSources();
-  // aynı link gelirse bir kere daha dene
-  if (picked[0].link && soy.link === picked[0].link) soy = await getNewsFromSources();
-  picked.push(soy);
+  let b = await getType("SOYLENTI");
+  if (!b) b = await getNewsFromSources();
+  if (picked[0].link && b.link === picked[0].link) b = await getNewsFromSources();
+  picked.push(b);
 
   return { first: picked[0], second: picked[1] };
 }
