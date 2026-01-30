@@ -2,7 +2,8 @@ import { Client, GatewayIntentBits } from "discord.js";
 import http from "node:http";
 import cron from "node-cron";
 import fs from "node:fs";
-
+import { fetchImagesFromArticle } from "./images.js";
+import { createSlideshowVideo } from "./slideshow.js";
 import { getNewsFromSources, getTwoNewsPack } from "./news.js";
 import { fetchArticleText, summarizeText, translateToTR } from "./article.js";
 
@@ -211,7 +212,44 @@ client.on("messageCreate", async (msg) => {
     }
     return;
   }
+if (t === "videodemo") {
+  try {
+    await msg.reply("🎬 Demo hazırlanıyor... (haber + görseller + video)");
 
+    const n = await getNewsFromSources();
+
+    // tam metinden iyi özet almak için:
+    // buildNewsMessage zaten yapıyor ama biz video için kısa summary istiyoruz
+    const baseSummary = (n.summary || "").replace(/\s+/g, " ").trim();
+    const shortSummary = summarizeText(baseSummary, 3);
+
+    const imgs = await fetchImagesFromArticle(n.link);
+    if (!imgs.length) {
+      await msg.reply("⚠️ Bu haberde görsel bulamadım. Başka haber dene: 'videodemo'");
+      return;
+    }
+
+    const videoPath = await createSlideshowVideo({
+      imageUrls: imgs,
+      title: n.title,
+      summary: shortSummary,
+      outPath: "/tmp/videodemo.mp4",
+      secondsPerSlide: 3
+    });
+
+    await msg.reply({
+      content:
+        `✅ Demo hazır!\n\n**${n.title}**\n` +
+        `${shortSummary}\n\n` +
+        `🔗 Kaynak: ${n.link}`,
+      files: [videoPath]
+    });
+  } catch (e) {
+    console.error(e);
+    await msg.reply("❌ videodemo hata: " + (e?.message || e));
+  }
+  return;
+}
   // ---- Karar komutları ----
   if (t === "oglen sil") {
     const d = loadDecisions();
