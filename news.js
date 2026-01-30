@@ -100,3 +100,7 @@ export async function getTwoNewsPack() {
 
   return { first: picked[0], second: picked[1] };
 }
+export async function getDailyNews() {
+  const list = await getTwoDailyNews();
+  return Array.isArray(list) ? list[0] : list;
+}
