@@ -7,7 +7,11 @@ import path from "node:path";
 const exec = promisify(execFile);
 
 async function download(url, filepath) {
-  const res = await axios.get(url, { responseType: "arraybuffer", timeout: 25000 });
+  const res = await axios.get(url, {
+    responseType: "arraybuffer",
+    timeout: 25000,
+    headers: { "User-Agent": "Mozilla/5.0" }
+  });
   fs.writeFileSync(filepath, res.data);
   return filepath;
 }
@@ -18,18 +22,6 @@ function clamp(s, n) {
   return t.slice(0, n - 3).trim() + "...";
 }
 
-function escapeDrawtext(s) {
-  return (s || "")
-    .replace(/\\/g, "\\\\")
-    .replace(/:/g, "\\:")
-    .replace(/'/g, "\\'")
-    .replace(/\[/g, "\\[")
-    .replace(/\]/g, "\\]")
-    .replace(/%/g, "\\%")
-    .replace(/\n/g, " ");
-}
-
-// Basit satır bölme (telefonda okunur olsun)
 function wrapLines(text, maxLen = 28, maxLines = 3) {
   const words = (text || "").replace(/\s+/g, " ").trim().split(" ");
   const lines = [];
@@ -49,64 +41,87 @@ function wrapLines(text, maxLen = 28, maxLines = 3) {
   return lines.slice(0, maxLines);
 }
 
+// ✅ drawtext için %100 güvenli escape
+function ffmpegSafeText(text) {
+  if (!text) return "";
+  return String(text)
+    .replace(/\\/g, "\\\\")   // \
+    .replace(/:/g, "\\:")    // :
+    .replace(/'/g, "\\'")    // '
+    .replace(/"/g, '\\"')    // "
+    .replace(/\n/g, "\\n")   // newline
+    .replace(/\r/g, "")
+    .replace(/%/g, "\\%")    // %
+    .replace(/\[/g, "\\[")   // [
+    .replace(/\]/g, "\\]");  // ]
+}
+
 export async function createSlideshowVideo({
   imageUrls,
   title,
   summary,
   outPath = "/tmp/videodemo.mp4",
-  secondsPerSlide = 3
+  secondsPerSlide = 2
 }) {
-  const imgs = (imageUrls || []).slice(0, 3);
-  if (imgs.length === 0) throw new Error("Görsel bulunamadı.");
+  const urls = (imageUrls || []).slice(0, 3);
+  if (!urls.length) throw new Error("Görsel bulunamadı.");
 
-  // /tmp içine indir
+  // Görselleri indir (indiremeyince atla)
   const localPaths = [];
-  for (let i = 0; i < imgs.length; i++) {
+  for (let i = 0; i < urls.length; i++) {
     const p = path.join("/tmp", `slide_${i + 1}.jpg`);
     try {
-      await download(imgs[i], p);
+      await download(urls[i], p);
       localPaths.push(p);
-    } catch {
-      // indirilemeyen görseli atla
+    } catch (e) {
+      console.error("IMG DOWNLOAD FAIL:", urls[i], e?.message || e);
     }
   }
-  if (localPaths.length === 0) throw new Error("Görseller indirilemedi.");
 
-  // 3 slide’a kadar tamamla (1-2 görsel geldiyse tekrar kullan)
+  if (!localPaths.length) throw new Error("Görseller indirilemedi.");
+
+  // 3 slayt yoksa sonuncuyu tekrar kullan
   while (localPaths.length < 3) localPaths.push(localPaths[localPaths.length - 1]);
+
   const durTotal = secondsPerSlide * 3;
 
+  // Font yolu (Dockerfile fonts-dejavu-core ile gelir)
   const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 
   const t1 = clamp(title, 90);
-  const s2 = clamp(summary, 220);
+  const s1 = clamp(summary, 220);
 
-  const titleLines = wrapLines(t1, 28, 3);
-  const sumLines = wrapLines(s2, 32, 4);
+  const titleLines = wrapLines(t1, 28, 3).join("\n");
+  const sumLines = wrapLines(s1, 32, 4).join("\n");
 
-  // drawtext katmanları: başlık + özet
-  const titleText = escapeDrawtext(titleLines.join("\\n"));
-  const sumText = escapeDrawtext(sumLines.join("\\n"));
+  const safeTitle = ffmpegSafeText(titleLines);
+  const safeSummary = ffmpegSafeText(sumLines);
+  const safeBrand = ffmpegSafeText("@otomatikspor");
 
-  // Video filtreleri (9:16 + yumuşak yazı kutusu)
-  const commonScale = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p";
+  // Render free stabil olsun diye 720x1280
+  const commonScale = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,format=yuv420p";
   const box1 = "box=1:boxcolor=black@0.45:boxborderw=18";
   const box2 = "box=1:boxcolor=black@0.35:boxborderw=18";
 
-  const v0 = `[0:v]${commonScale},` +
-    `drawtext=fontfile=${font}:text='${titleText}':fontsize=60:fontcolor=white:x=(w-text_w)/2:y=240:line_spacing=10:${box1},` +
-    `fade=t=in:st=0:d=0.4,fade=t=out:st=2.6:d=0.4[v0]`;
+  // Slide 1: başlık
+  const v0 =
+    `[0:v]${commonScale},` +
+    `drawtext=fontfile=${font}:text='${safeTitle}':fontsize=52:fontcolor=white:x=(w-text_w)/2:y=180:line_spacing=10:${box1},` +
+    `fade=t=in:st=0:d=0.35,fade=t=out:st=${(secondsPerSlide - 0.35).toFixed(2)}:d=0.35[v0]`;
 
-  const v1 = `[1:v]${commonScale},` +
-    `drawtext=fontfile=${font}:text='${sumText}':fontsize=44:fontcolor=white:x=(w-text_w)/2:y=360:line_spacing=12:${box2},` +
-    `fade=t=in:st=0:d=0.4,fade=t=out:st=2.6:d=0.4[v1]`;
+  // Slide 2: özet
+  const v1 =
+    `[1:v]${commonScale},` +
+    `drawtext=fontfile=${font}:text='${safeSummary}':fontsize=38:fontcolor=white:x=(w-text_w)/2:y=260:line_spacing=12:${box2},` +
+    `fade=t=in:st=0:d=0.35,fade=t=out:st=${(secondsPerSlide - 0.35).toFixed(2)}:d=0.35[v1]`;
 
-  const v2 = `[2:v]${commonScale},` +
-    `drawtext=fontfile=${font}:text='@otomatikspor':fontsize=46:fontcolor=white:x=(w-text_w)/2:y=900:${box2},` +
-    `fade=t=in:st=0:d=0.4,fade=t=out:st=2.6:d=0.4[v2]`;
+  // Slide 3: marka
+  const v2 =
+    `[2:v]${commonScale},` +
+    `drawtext=fontfile=${font}:text='${safeBrand}':fontsize=42:fontcolor=white:x=(w-text_w)/2:y=860:${box2},` +
+    `fade=t=in:st=0:d=0.35,fade=t=out:st=${(secondsPerSlide - 0.35).toFixed(2)}:d=0.35[v2]`;
 
-  // Yapay “sakin” ambient ses (telif yok)
-  // 2 sine + düşük ses + lowpass + echo
+  // Yapay sakin ses (telif yok)
   const a =
     `[3:a]volume=0.06[a1];` +
     `[4:a]volume=0.04[a2];` +
@@ -117,8 +132,7 @@ export async function createSlideshowVideo({
     `[v0][v1][v2]concat=n=3:v=1:a=0[v];` +
     `${a}`;
 
-  // ffmpeg komutu
-  // -loop 1 ile resimleri video gibi okutuyoruz
+  // ffmpeg ile üret
   await exec("ffmpeg", [
     "-y",
 
@@ -126,20 +140,24 @@ export async function createSlideshowVideo({
     "-loop", "1", "-t", String(secondsPerSlide), "-i", localPaths[1],
     "-loop", "1", "-t", String(secondsPerSlide), "-i", localPaths[2],
 
-    // 2 katmanlı ambient ses üret
     "-f", "lavfi", "-t", String(durTotal), "-i", "sine=frequency=220:sample_rate=44100",
     "-f", "lavfi", "-t", String(durTotal), "-i", "sine=frequency=330:sample_rate=44100",
 
     "-filter_complex", filterComplex,
     "-map", "[v]",
     "-map", "[a]",
+
     "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-crf", "28",
     "-pix_fmt", "yuv420p",
     "-r", "30",
+
     "-c:a", "aac",
     "-shortest",
+
     outPath
   ]);
 
   return outPath;
-    }
+}
