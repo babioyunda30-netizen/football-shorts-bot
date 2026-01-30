@@ -1,50 +1,33 @@
-import { Client, GatewayIntentBits } from "discord.js";
+import { Client, GatewayIntentBits, Events } from "discord.js";
 import http from "node:http";
 import cron from "node-cron";
-import fs from "node:fs";
+import fs from "fs";
+
+import { getTwoDailyNews, getDailyNews } from "./news.js";
 import { fetchImagesFromArticle } from "./images.js";
 import { createSlideshowVideo } from "./slideshow.js";
-import { getNewsFromSources, getTwoNewsPack } from "./news.js";
-import { fetchArticleText, summarizeText, translateToTR } from "./article.js";
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const TARGET_USER_ID = process.env.TARGET_USER_ID;
 const PORT = process.env.PORT || 3000;
 
-// Render port ister: mini HTTP server
-http
-  .createServer((req, res) => {
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("Bot is alive");
-  })
-  .listen(PORT, () => console.log("HTTP server running on port " + PORT));
+/* ------------------ HTTP keep-alive ------------------ */
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("alive");
+}).listen(PORT);
 
+/* ------------------ Güvenlik kontrolleri ------------------ */
 if (!TOKEN) {
-  console.error("DISCORD_TOKEN yok (Render env variables kontrol et).");
+  console.error("DISCORD_TOKEN yok");
   process.exit(1);
 }
 if (!TARGET_USER_ID) {
-  console.error("TARGET_USER_ID yok (Render env variables kontrol et).");
+  console.error("TARGET_USER_ID yok");
   process.exit(1);
 }
 
-// ---- Karar kaydı (FAZ 1) ----
-function loadDecisions() {
-  try {
-    const raw = fs.readFileSync("./decisions.json", "utf-8");
-    return JSON.parse(raw);
-  } catch {
-    return {
-      oglen: { kalsin: 0, sil: 0 },
-      aksam: { kalsin: 0, sil: 0 }
-    };
-  }
-}
-
-function saveDecisions(data) {
-  fs.writeFileSync("./decisions.json", JSON.stringify(data, null, 2));
-}
-
+/* ------------------ Client ------------------ */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -53,235 +36,95 @@ const client = new Client({
   ]
 });
 
-async function dm(text) {
-  const user = await client.users.fetch(TARGET_USER_ID);
-  return user.send(text);
-}
-
-function buildHeader(n) {
-  const turEmoji = n.type === "RESMI" ? "🟢" : "🟡";
-  const turText = n.type === "RESMI" ? "Resmî" : "Söylenti";
-  const dilText = "Türkçe"; // sabit
-  return `${turEmoji} Tür: ${turText}\n📰 Kaynak: ${n.source}\n🌍 Dil: ${dilText}\n`;
-}
-
-async function buildNewsMessage(n) {
-  // 1) Tam metni çek
-  let fullText = "";
-  try {
-    if (n.link) fullText = await fetchArticleText(n.link);
-  } catch (e) {
-    console.error("Makale çekilemedi:", e?.message || e);
-  }
-
-  // 2) Özetle: tam metin varsa onu, yoksa RSS summary
-  const baseText =
-    fullText && fullText.length > 200 ? fullText : (n.summary || "");
-
-  let ozetTR = summarizeText(baseText, 3);
-
-  // Fallback: özet boşsa RSS'ye düş
-  if (!ozetTR || ozetTR.length < 40) {
-    ozetTR = (n.summary || "").replace(/\s+/g, " ").trim();
-  }
-  if (!ozetTR || ozetTR.length < 40) {
-    ozetTR = "Bu haber kaynağı metni kısa verdi/engelledi, özet çıkarılamadı.";
-  }
-
-  // 3) İngilizce kaynaksa -> Türkçe çeviri ekle
-  let ceviriBilgi = "";
-  if (n.lang === "EN") {
-    try {
-      const tr = await translateToTR(ozetTR);
-      if (tr) {
-        ceviriBilgi = `\n\n🈶 **Çeviri (TR):**\n${tr}`;
-      }
-    } catch (e) {
-      console.error("Çeviri hatası:", e?.message || e);
-    }
-  }
-
-  return (
-    `${buildHeader(n)}\n` +
-    `**${n.title}**\n` +
-    `${ozetTR}` +
-    `${ceviriBilgi}\n\n` +
-    `🔗 Kaynak: ${n.link}`
-  );
-}
-
-client.once("ready", async () => {
-  console.log(`Bot hazır: ${client.user.tag}`);
-  await dm("🤖 Bot çalışıyor. DM testi başarılı!");
-
-  // Öğlen (08:30 UTC = 12:30 AZT)
-  cron.schedule(
-    "30 8 * * *",
-    async () => {
-      try {
-        const p = await getTwoNewsPack();
-        const t1 = await buildNewsMessage(p.first);
-        const t2 = await buildNewsMessage(p.second);
-
-        await dm(
-          "⏰ **Otomatik Paket (Öğlen)**\n\n" +
-            `1)\n${t1}\n\n` +
-            `2)\n${t2}`
-        );
-      } catch (e) {
-        console.error(e);
-        await dm("❌ Otomatik paket (öğlen) hazırlanamadı.");
-      }
-    },
-    { timezone: "UTC" }
-  );
-
-  // Akşam (16:30 UTC = 20:30 AZT)
-  cron.schedule(
-    "30 16 * * *",
-    async () => {
-      try {
-        const p = await getTwoNewsPack();
-        const t1 = await buildNewsMessage(p.first);
-        const t2 = await buildNewsMessage(p.second);
-
-        await dm(
-          "⏰ **Otomatik Paket (Akşam)**\n\n" +
-            `1)\n${t1}\n\n` +
-            `2)\n${t2}`
-        );
-      } catch (e) {
-        console.error(e);
-        await dm("❌ Otomatik paket (akşam) hazırlanamadı.");
-      }
-    },
-    { timezone: "UTC" }
-  );
+/* ------------------ Crash KORUMASI ------------------ */
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED REJECTION:", err);
 });
 
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
+/* Discord client error yakala */
+client.on("error", (err) => {
+  console.error("DISCORD CLIENT ERROR:", err);
+});
+
+/* ------------------ DM helper (ASLA crash atmaz) ------------------ */
+async function safeDM(text) {
+  try {
+    const user = await client.users.fetch(TARGET_USER_ID);
+    await user.send(text);
+  } catch (e) {
+    console.error("DM FAILED:", e?.message || e);
+  }
+}
+
+/* ------------------ READY ------------------ */
+client.once(Events.ClientReady, async () => {
+  console.log(`Bot hazır: ${client.user.tag}`);
+  await safeDM("🤖 Bot ayakta. Sistem stabil.");
+});
+
+/* ------------------ KOMUTLAR ------------------ */
 client.on("messageCreate", async (msg) => {
   if (msg.author.id !== TARGET_USER_ID) return;
+
   const t = msg.content.toLowerCase().trim();
 
+  /* ---- Basit test ---- */
   if (t === "test") {
-    await msg.reply("✅ Test aldım.");
+    await msg.reply("✅ Bot çalışıyor.");
     return;
   }
 
-  if (t === "bbc") {
-    try {
-      const textEN =
-        "Breaking: A top club is in talks for a new striker as fans react online.";
-      const tr = await translateToTR(textEN);
-      await msg.reply(
-        `🧪 **Çeviri Testi**\n\n🇬🇧 EN:\n${textEN}\n\n🇹🇷 TR:\n${tr}`
-      );
-    } catch (e) {
-      console.error(e);
-      await msg.reply("❌ Çeviri testi başarısız oldu.");
-    }
-    return;
-  }
-
+  /* ---- Haber ---- */
   if (t === "haber") {
     try {
-      const n = await getNewsFromSources();
-      const text = await buildNewsMessage(n);
-      await msg.reply(text);
-    } catch (e) {
-      console.error(e);
-      await msg.reply("❌ Haber çekemedim.");
-    }
-    return;
-  }
-
-  if (t === "gunluk") {
-    try {
-      const p = await getTwoNewsPack();
-      const t1 = await buildNewsMessage(p.first);
-      const t2 = await buildNewsMessage(p.second);
-
+      const n = await getDailyNews();
       await msg.reply(
-        `📦 **Günlük Paket (2 Haber)**\n\n` +
-          `1)\n${t1}\n\n` +
-          `2)\n${t2}`
+        `📰 **${n.title}**\n\n${n.summary}\n\n🔗 ${n.link}`
       );
     } catch (e) {
       console.error(e);
-      await msg.reply("❌ Günlük paket çekemedim.");
+      await msg.reply("❌ Haber alınamadı.");
     }
     return;
   }
-if (t === "videodemo") {
-  try {
-    await msg.reply("🎬 Demo hazırlanıyor... (haber + görseller + video)");
 
-    const n = await getNewsFromSources();
+  /* ---- VIDEO DEMO (STABİL) ---- */
+  if (t === "videodemo") {
+    try {
+      await msg.reply("🎬 Demo hazırlanıyor (çökmez sürüm)…");
 
-    // tam metinden iyi özet almak için:
-    // buildNewsMessage zaten yapıyor ama biz video için kısa summary istiyoruz
-    const baseSummary = (n.summary || "").replace(/\s+/g, " ").trim();
-    const shortSummary = summarizeText(baseSummary, 3);
+      const n = await getDailyNews();
+      const images = await fetchImagesFromArticle(n.link);
 
-    const imgs = await fetchImagesFromArticle(n.link);
-    if (!imgs.length) {
-      await msg.reply("⚠️ Bu haberde görsel bulamadım. Başka haber dene: 'videodemo'");
-      return;
+      if (!images.length) {
+        await msg.reply("⚠️ Görsel bulunamadı, başka haber dene.");
+        return;
+      }
+
+      const videoPath = await createSlideshowVideo({
+        imageUrls: images,
+        title: n.title,
+        summary: n.summary,
+        secondsPerSlide: 2, // hafif
+        outPath: "/tmp/demo.mp4"
+      });
+
+      await msg.reply({
+        content: `✅ **Video hazır**\n${n.title}\n\n🔗 ${n.link}`,
+        files: [videoPath]
+      });
+
+    } catch (e) {
+      console.error("VIDEODEMO ERROR:", e);
+      await msg.reply("❌ Video üretirken hata oldu (loglara bak).");
     }
-
-    const videoPath = await createSlideshowVideo({
-      imageUrls: imgs,
-      title: n.title,
-      summary: shortSummary,
-      outPath: "/tmp/videodemo.mp4",
-      secondsPerSlide: 3
-    });
-
-    await msg.reply({
-      content:
-        `✅ Demo hazır!\n\n**${n.title}**\n` +
-        `${shortSummary}\n\n` +
-        `🔗 Kaynak: ${n.link}`,
-      files: [videoPath]
-    });
-  } catch (e) {
-    console.error(e);
-    await msg.reply("❌ videodemo hata: " + (e?.message || e));
-  }
-  return;
-}
-  // ---- Karar komutları ----
-  if (t === "oglen sil") {
-    const d = loadDecisions();
-    d.oglen.sil++;
-    saveDecisions(d);
-    await msg.reply("🗑️ Öğlen içeriği SİLİNSİN olarak kaydedildi.");
-    return;
-  }
-
-  if (t === "oglen kalsin") {
-    const d = loadDecisions();
-    d.oglen.kalsin++;
-    saveDecisions(d);
-    await msg.reply("✅ Öğlen içeriği KALSIN olarak kaydedildi.");
-    return;
-  }
-
-  if (t === "aksam sil") {
-    const d = loadDecisions();
-    d.aksam.sil++;
-    saveDecisions(d);
-    await msg.reply("🗑️ Akşam içeriği SİLİNSİN olarak kaydedildi.");
-    return;
-  }
-
-  if (t === "aksam kalsin") {
-    const d = loadDecisions();
-    d.aksam.kalsin++;
-    saveDecisions(d);
-    await msg.reply("✅ Akşam içeriği KALSIN olarak kaydedildi.");
     return;
   }
 });
 
+/* ------------------ LOGIN ------------------ */
 client.login(TOKEN);
