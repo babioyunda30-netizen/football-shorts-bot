@@ -57,17 +57,17 @@ export async function createSlideshowVideo({
     try {
       await download(urls[i], p);
       localPaths.push(p);
-    } catch {}
+    } catch (e) {
+      console.error("IMG DOWNLOAD FAIL:", urls[i], e?.message || e);
+    }
   }
   if (!localPaths.length) throw new Error("Görseller indirilemedi");
 
   while (localPaths.length < 3) localPaths.push(localPaths[localPaths.length - 1]);
 
-  // METİNLERİ DOSYA OLARAK YAZ (KRİTİK NOKTA)
-  const titleText =
-    wrapLines(clamp(title, 90), 28, 3).join("\n");
-  const summaryText =
-    wrapLines(clamp(summary, 220), 32, 4).join("\n");
+  // Metinleri DOSYA olarak yaz (drawtext crash çözümü)
+  const titleText = wrapLines(clamp(title, 90), 28, 3).join("\n");
+  const summaryText = wrapLines(clamp(summary, 220), 32, 4).join("\n");
 
   const titleFile = "/tmp/title.txt";
   const summaryFile = "/tmp/summary.txt";
@@ -80,35 +80,40 @@ export async function createSlideshowVideo({
   const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
   const durTotal = secondsPerSlide * 3;
 
+  // 720x1280 = Render free için daha stabil
   const scale = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,format=yuv420p";
   const box1 = "box=1:boxcolor=black@0.45:boxborderw=18";
   const box2 = "box=1:boxcolor=black@0.35:boxborderw=18";
 
+  const fadeOutStart = (secondsPerSlide - 0.35).toFixed(2);
+
   const v0 =
     `[0:v]${scale},` +
     `drawtext=fontfile=${font}:textfile=${titleFile}:fontsize=52:fontcolor=white:x=(w-text_w)/2:y=180:line_spacing=10:${box1},` +
-    `fade=t=in:st=0:d=0.35,fade=t=out:st=1.65:d=0.35[v0]`;
+    `fade=t=in:st=0:d=0.35,fade=t=out:st=${fadeOutStart}:d=0.35[v0]`;
 
   const v1 =
     `[1:v]${scale},` +
     `drawtext=fontfile=${font}:textfile=${summaryFile}:fontsize=38:fontcolor=white:x=(w-text_w)/2:y=260:line_spacing=12:${box2},` +
-    `fade=t=in:st=0:d=0.35,fade=t=out:st=1.65:d=0.35[v1]`;
+    `fade=t=in:st=0:d=0.35,fade=t=out:st=${fadeOutStart}:d=0.35[v1]`;
 
   const v2 =
     `[2:v]${scale},` +
     `drawtext=fontfile=${font}:textfile=${brandFile}:fontsize=42:fontcolor=white:x=(w-text_w)/2:y=860:${box2},` +
-    `fade=t=in:st=0:d=0.35,fade=t=out:st=1.65:d=0.35[v2]`;
+    `fade=t=in:st=0:d=0.35,fade=t=out:st=${fadeOutStart}:d=0.35[v2]`;
 
-  const audio =
-    `[3:a]volume=0.06[a1];` +
-    `[4:a]volume=0.04[a2];` +
-    `[a1][a2]amix=inputs=2,lowpass=f=1200,aecho=0.8:0.9:900:0.18,volume=0.9[a]`;
+  // ✅ TEK SES KAYNAĞI (pink noise) — decode hatası yok
+  // Çok hafif + lowpass + echo = sakin ambient
+  const a =
+    `[3:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,` +
+    `volume=0.06,lowpass=f=1200,aecho=0.8:0.9:900:0.18,volume=0.9[a]`;
 
   const filterComplex =
     `${v0};${v1};${v2};` +
     `[v0][v1][v2]concat=n=3:v=1:a=0[v];` +
-    `${audio}`;
+    `${a}`;
 
+  // ffmpeg ile üret
   await exec("ffmpeg", [
     "-y",
 
@@ -116,8 +121,8 @@ export async function createSlideshowVideo({
     "-loop", "1", "-t", String(secondsPerSlide), "-i", localPaths[1],
     "-loop", "1", "-t", String(secondsPerSlide), "-i", localPaths[2],
 
-    "-f", "lavfi", "-t", String(durTotal), "-i", "sine=frequency=220",
-    "-f", "lavfi", "-t", String(durTotal), "-i", "sine=frequency=330",
+    // ✅ tek audio input
+    "-f", "lavfi", "-t", String(durTotal), "-i", "anoisesrc=color=pink:sample_rate=44100",
 
     "-filter_complex", filterComplex,
     "-map", "[v]",
