@@ -34,4 +34,49 @@ export async function getNewsFromSources() {
     type: pickedSource.type,
     lang: pickedSource.lang
   };
+export async function getTwoNewsPack() {
+  // 1) Resmî + 1) Söylenti yakalamaya çalış
+  const want = ["RESMI", "SOYLENTI"];
+  const picked = [];
+
+  for (const type of want) {
+    let got = null;
+
+    for (let i = 0; i < 6; i++) {
+      const n = await getNewsFromSources();
+
+      // aynı link tekrar gelmesin
+      const dup = picked.some((p) => p.link && p.link === n.link);
+      if (dup) continue;
+
+      if (n.type === type) {
+        got = n;
+        break;
+      }
+    }
+
+    // bulunamazsa rastgele bir haberle doldur
+    if (!got) {
+      for (let i = 0; i < 6; i++) {
+        const n = await getNewsFromSources();
+        const dup = picked.some((p) => p.link && p.link === n.link);
+        if (dup) continue;
+        got = n;
+        break;
+      }
+    }
+
+    if (got) picked.push(got);
+  }
+
+  // her ihtimale karşı 2 tane yoksa tamamla
+  while (picked.length < 2) {
+    const n = await getNewsFromSources();
+    const dup = picked.some((p) => p.link && p.link === n.link);
+    if (!dup) picked.push(n);
+  }
+
+  return { first: picked[0], second: picked[1] };
+}
+
 }
